@@ -6,7 +6,19 @@ import ChatList from "@/components/ChatList";
 import RecordDetailSheet from "@/components/RecordDetailSheet";
 import RecordFullDetailScreen from "@/components/RecordFullDetailScreen";
 import Records from "@/pages/Records";
+import Schedule from "@/pages/Schedule";
+import {
+  triggerGroupAnalysis,
+  triggerPrivateAnalysis,
+  triggerSelfAnalysis,
+} from "@/lib/scheduleCoordinator";
 import { aiConversationLogEntries } from "@/data/aiConversationLog";
+import {
+  loadAiSettings,
+  persistAiSettings,
+  type AiSettings,
+} from "@/data/aiSettings";
+import { callAiChat } from "@/lib/aiClient";
 import { useCandidateProfile } from "@/data/candidateProfile";
 import {
   createTestReplyMessage,
@@ -57,6 +69,7 @@ type TabItem = {
 
 const tabs: TabItem[] = [
   { key: "records" },
+  { key: "schedule" },
   { key: "insight" },
   { key: "mine" },
 ];
@@ -329,6 +342,10 @@ function shouldRequestBrowserNotificationPermission() {
 
 export default function Home({ currentPage, onNavigate }: HomeProps) {
   const { t } = usePreferences();
+  const homeCandidateProfile = useCandidateProfile();
+  const selfNameForAnalysis = homeCandidateProfile?.name || t("recordDetail.me");
+  const analyzedMessageIdsRef = React.useRef<Set<string>>(new Set());
+  const seededAnalyzedMessagesRef = React.useRef(false);
   const [showSearch, setShowSearch] = React.useState(false);
   const [showMenu, setShowMenu] = React.useState(false);
   const [showAnswerGuide, setShowAnswerGuide] = React.useState(false);
@@ -342,9 +359,9 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
   const [sendToSelfTargetUid, setSendToSelfTargetUid] = React.useState<string | null>(null);
   const [activeTestIdentityId, setActiveTestIdentityId] = React.useState<string | null>(null);
   const [testConversationTargetUid, setTestConversationTargetUid] = React.useState<string | null>(null);
-  const [settingsView, setSettingsView] = React.useState<null | "settings" | "appearance" | "about">(
-    null
-  );
+  const [settingsView, setSettingsView] = React.useState<
+    null | "settings" | "appearance" | "about" | "ai"
+  >(null);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [searchHistory, setSearchHistory] = React.useState(getInitialSearchHistory);
   const [recordDetail, setRecordDetail] = React.useState<RecordItem | null>(null);
@@ -697,6 +714,86 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     (total, summary) => total + summary.unreadCount,
     0
   );
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!seededAnalyzedMessagesRef.current) {
+      for (const message of testMessages) {
+        analyzedMessageIdsRef.current.add(message.id);
+      }
+      seededAnalyzedMessagesRef.current = true;
+      return;
+    }
+
+    const summariesById = new Map<string, TestConversationSummary>();
+    for (const summary of testConversationSummaries) {
+      summariesById.set(summary.conversationId, summary);
+    }
+
+    for (const message of testMessages) {
+      if (message.sender !== "identity") continue;
+      if (analyzedMessageIdsRef.current.has(message.id)) continue;
+      analyzedMessageIdsRef.current.add(message.id);
+      const summary = summariesById.get(message.conversationId);
+      if (!summary) continue;
+
+      const conversationMessages = testMessages.filter(
+        (entry) => entry.conversationId === message.conversationId
+      );
+      const history = conversationMessages.map((entry) => {
+        const isSelf = entry.sender === "demo";
+        let senderName: string;
+        if (isSelf) {
+          senderName = selfNameForAnalysis;
+        } else if (summary.conversationType === "group") {
+          senderName =
+            summary.memberIdentities.find((identity) => identity.id === entry.identityId)?.name ??
+            entry.identityId;
+        } else {
+          senderName = summary.identity?.name ?? entry.identityId;
+        }
+        return {
+          id: entry.id,
+          text: entry.text,
+          sentAt: entry.sentAt,
+          senderName,
+          senderIsSelf: isSelf,
+        };
+      });
+
+      const triggerSender =
+        summary.conversationType === "group"
+          ? summary.memberIdentities.find((identity) => identity.id === message.identityId)?.name ??
+            message.identityId
+          : summary.identity?.name ?? message.identityId;
+
+      const trigger = {
+        id: message.id,
+        text: message.text,
+        sentAt: message.sentAt,
+        senderName: triggerSender,
+        senderIsSelf: false,
+      };
+
+      if (summary.conversationType === "group") {
+        void triggerGroupAnalysis({
+          selfName: selfNameForAnalysis,
+          conversationId: summary.conversationId,
+          conversationLabel: summary.title,
+          trigger,
+          history,
+        });
+      } else {
+        void triggerPrivateAnalysis({
+          selfName: selfNameForAnalysis,
+          conversationId: summary.conversationId,
+          conversationLabel: summary.title,
+          trigger,
+          history,
+        });
+      }
+    }
+  }, [selfNameForAnalysis, testConversationSummaries, testMessages]);
   const homeMessagePreview = React.useMemo<HomeMessagePreview | null>(
     () =>
       testConversationSummaries.reduce<HomeMessagePreview | null>(
@@ -757,23 +854,38 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     });
   }, []);
 
-  const createSelfRecord = React.useCallback((content: string) => {
-    const timestamp = Date.now();
-    setCreatedSelfRecords((prev) => {
-      const nextRecords = [
-        ...prev,
-        {
-          uid: `self-${timestamp}`,
+  const createSelfRecord = React.useCallback(
+    (content: string) => {
+      const timestamp = Date.now();
+      const triggerUid = `self-${timestamp}`;
+      setCreatedSelfRecords((prev) => {
+        const nextRecord = {
+          uid: triggerUid,
           text_content: content,
           send_at: timestamp,
           create_at: timestamp,
           update_at: timestamp,
-        },
-      ];
-      persistCreatedSelfRecords(nextRecords);
-      return nextRecords;
-    });
-  }, []);
+        };
+        const nextRecords = [...prev, nextRecord];
+        persistCreatedSelfRecords(nextRecords);
+        const historyForAnalysis = nextRecords.map((record) => ({
+          id: record.uid,
+          text: record.text_content,
+          sentAt: record.send_at,
+          senderName: selfNameForAnalysis,
+          senderIsSelf: true,
+        }));
+        void triggerSelfAnalysis({
+          selfName: selfNameForAnalysis,
+          conversationLabel: t("sendToSelf.title"),
+          trigger: { id: triggerUid, text: content, sentAt: timestamp },
+          history: historyForAnalysis,
+        });
+        return nextRecords;
+      });
+    },
+    [selfNameForAnalysis, t]
+  );
 
   const createRecordExtension = React.useCallback((parentRecord: RecordItem, content: string) => {
     const timestamp = Date.now();
@@ -1023,20 +1135,78 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
     );
   }, [homeMessagePreview, openTestConversation]);
 
-  const createTestReply = React.useCallback((summary: TestConversationSummary, content: string) => {
-    const reply = createTestReplyMessage(
-      summary.conversationId,
-      content,
-      summary.conversationType
-    );
-    setTestMessages((prev) => {
-      const nextMessages = [...prev, reply];
-      persistTestMessages(nextMessages);
-      return nextMessages;
-    });
-    markTestConversationAsRead(summary.conversationId);
-    setTestConversationTargetUid(`test-${reply.id}`);
-  }, [markTestConversationAsRead]);
+  const createTestReply = React.useCallback(
+    (summary: TestConversationSummary, content: string) => {
+      const reply = createTestReplyMessage(
+        summary.conversationId,
+        content,
+        summary.conversationType
+      );
+      setTestMessages((prev) => {
+        const nextMessages = [...prev, reply];
+        persistTestMessages(nextMessages);
+
+        const conversationMessages = nextMessages.filter(
+          (message) => message.conversationId === summary.conversationId
+        );
+        const history = conversationMessages.map((message) => {
+          const isSelf = message.sender === "demo";
+          let senderName: string;
+          if (isSelf) {
+            senderName = selfNameForAnalysis;
+          } else if (summary.conversationType === "group") {
+            senderName =
+              summary.memberIdentities.find((identity) => identity.id === message.identityId)
+                ?.name ?? message.identityId;
+          } else {
+            senderName = summary.identity?.name ?? message.identityId;
+          }
+          analyzedMessageIdsRef.current.add(message.id);
+          return {
+            id: message.id,
+            text: message.text,
+            sentAt: message.sentAt,
+            senderName,
+            senderIsSelf: isSelf,
+          };
+        });
+
+        if (summary.conversationType === "group") {
+          void triggerGroupAnalysis({
+            selfName: selfNameForAnalysis,
+            conversationId: summary.conversationId,
+            conversationLabel: summary.title,
+            trigger: {
+              id: reply.id,
+              text: reply.text,
+              sentAt: reply.sentAt,
+              senderName: selfNameForAnalysis,
+              senderIsSelf: true,
+            },
+            history,
+          });
+        } else {
+          void triggerPrivateAnalysis({
+            selfName: selfNameForAnalysis,
+            conversationId: summary.conversationId,
+            conversationLabel: summary.title,
+            trigger: {
+              id: reply.id,
+              text: reply.text,
+              sentAt: reply.sentAt,
+              senderName: selfNameForAnalysis,
+              senderIsSelf: true,
+            },
+            history,
+          });
+        }
+        return nextMessages;
+      });
+      markTestConversationAsRead(summary.conversationId);
+      setTestConversationTargetUid(`test-${reply.id}`);
+    },
+    [markTestConversationAsRead, selfNameForAnalysis]
+  );
 
   const openSourceConversation = React.useCallback(
     (source: RecordSourceConversation) => {
@@ -1091,11 +1261,16 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       return <AboutScreen onBack={() => setSettingsView(null)} />;
     }
 
+    if (settingsView === "ai") {
+      return <AiSettingsScreen onBack={() => setSettingsView("settings")} />;
+    }
+
     if (settingsView === "settings") {
       return (
         <SettingsScreen
           onBack={() => setSettingsView(null)}
           onOpenAppearance={() => setSettingsView("appearance")}
+          onOpenAi={() => setSettingsView("ai")}
         />
       );
     }
@@ -1168,6 +1343,10 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenAbout={() => setSettingsView("about")}
         />
       );
+    }
+
+    if (currentPage === "schedule") {
+      return <Schedule />;
     }
 
     if (currentPage === "insight") {
@@ -3110,12 +3289,15 @@ function MineActionCard({
 function SettingsScreen({
   onBack,
   onOpenAppearance,
+  onOpenAi,
 }: {
   onBack: () => void;
   onOpenAppearance: () => void;
+  onOpenAi: () => void;
 }) {
   const { localeCode, resolvedLocale, t } = usePreferences();
   const [showLanguageSheet, setShowLanguageSheet] = React.useState(false);
+  const aiSettingsForDisplay = React.useMemo(() => loadAiSettings(), []);
 
   return (
     <div className="relative flex h-full flex-col bg-bg">
@@ -3137,12 +3319,238 @@ function SettingsScreen({
             }`}
             onClick={() => setShowLanguageSheet(true)}
           />
+          <SettingsListItem
+            title={t("aiSettings.entryTitle")}
+            description={
+              aiSettingsForDisplay.enabled
+                ? aiSettingsForDisplay.provider === "demo-mock"
+                  ? t("aiSettings.entryDemoActive")
+                  : aiSettingsForDisplay.apiKey
+                  ? t("aiSettings.entryConfigured")
+                  : t("aiSettings.entryMissingKey")
+                : t("aiSettings.entryOff")
+            }
+            onClick={onOpenAi}
+          />
         </div>
       </div>
 
       {showLanguageSheet && (
         <LanguageSheet onClose={() => setShowLanguageSheet(false)} />
       )}
+    </div>
+  );
+}
+
+function AiSettingsScreen({ onBack }: { onBack: () => void }) {
+  const { t } = usePreferences();
+  const [settings, setSettings] = React.useState(() => loadAiSettings());
+  const [testStatus, setTestStatus] = React.useState<"" | "pending" | "ok" | "error">("");
+  const [testMessage, setTestMessage] = React.useState("");
+
+  const updateSettings = (next: AiSettings) => {
+    setSettings(next);
+    persistAiSettings(next);
+  };
+
+  const handleTest = async () => {
+    if (settings.provider === "demo-mock") {
+      setTestStatus("ok");
+      setTestMessage(t("aiSettings.demoModeNotice"));
+      return;
+    }
+    if (!settings.apiKey.trim()) {
+      setTestStatus("error");
+      setTestMessage(t("aiSettings.missingKeyNotice"));
+      return;
+    }
+    setTestStatus("pending");
+    setTestMessage("");
+    const result = await callAiChat(settings, [
+      { role: "system", content: "Respond with the JSON object {\"ok\":true}." },
+      { role: "user", content: "ping" },
+    ]);
+    if (result.ok) {
+      setTestStatus("ok");
+      setTestMessage(t("aiSettings.testOk"));
+    } else {
+      setTestStatus("error");
+      setTestMessage(result.error || t("aiSettings.testFailed"));
+    }
+  };
+
+  return (
+    <div className="relative flex h-full flex-col bg-bg">
+      <MobilePageHeader title={t("aiSettings.title")} onBack={onBack} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-3">
+        <section className="overflow-hidden rounded-[12px] bg-surface px-3 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text">
+                {t("aiSettings.enable")}
+              </p>
+              <p className="mt-0.5 text-[11px] leading-4 text-text-tertiary">
+                {t("aiSettings.enableDesc")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => updateSettings({ ...settings, enabled: !settings.enabled })}
+              className={cn(
+                "relative h-6 w-11 shrink-0 rounded-full transition",
+                settings.enabled ? "bg-primary" : "bg-surface-2"
+              )}
+              aria-pressed={settings.enabled}
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition",
+                  settings.enabled ? "left-[22px]" : "left-0.5"
+                )}
+              />
+            </button>
+          </div>
+        </section>
+
+        <section className="mt-3 overflow-hidden rounded-[12px] bg-surface px-3 py-3">
+          <p className="text-[11px] font-semibold text-text-tertiary">
+            {t("aiSettings.provider")}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {(["openai", "anthropic", "demo-mock"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() =>
+                  updateSettings({
+                    ...settings,
+                    provider: value,
+                    baseUrl:
+                      value === "anthropic"
+                        ? "https://api.anthropic.com"
+                        : value === "openai"
+                        ? "https://api.openai.com/v1"
+                        : settings.baseUrl,
+                    model:
+                      value === "anthropic"
+                        ? "claude-3-5-sonnet-latest"
+                        : value === "openai"
+                        ? "gpt-4o-mini"
+                        : settings.model,
+                  })
+                }
+                className={cn(
+                  "h-8 rounded-full border px-3 text-xs transition",
+                  settings.provider === value
+                    ? "border-primary bg-primary-soft text-primary"
+                    : "border-border bg-surface text-text-muted"
+                )}
+              >
+                {t(`aiSettings.provider.${value}`)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-4 text-text-tertiary">
+            {t(`aiSettings.providerDesc.${settings.provider}`)}
+          </p>
+        </section>
+
+        {settings.provider !== "demo-mock" && (
+          <section className="mt-3 overflow-hidden rounded-[12px] bg-surface px-3 py-3">
+            <p className="text-[11px] font-semibold text-text-tertiary">
+              {t("aiSettings.apiKey")}
+            </p>
+            <input
+              type="password"
+              value={settings.apiKey}
+              onChange={(event) =>
+                updateSettings({ ...settings, apiKey: event.target.value })
+              }
+              placeholder={t("aiSettings.apiKeyPlaceholder")}
+              autoComplete="off"
+              className="mt-2 w-full rounded-[10px] bg-surface-muted px-3 py-2 text-sm text-text outline-none placeholder:text-text-disabled"
+            />
+            <p className="mt-2 text-[11px] leading-4 text-text-tertiary">
+              {t("aiSettings.apiKeyDesc")}
+            </p>
+
+            <p className="mt-3 text-[11px] font-semibold text-text-tertiary">
+              {t("aiSettings.baseUrl")}
+            </p>
+            <input
+              type="text"
+              value={settings.baseUrl}
+              onChange={(event) =>
+                updateSettings({ ...settings, baseUrl: event.target.value })
+              }
+              className="mt-2 w-full rounded-[10px] bg-surface-muted px-3 py-2 text-sm text-text outline-none"
+            />
+
+            <p className="mt-3 text-[11px] font-semibold text-text-tertiary">
+              {t("aiSettings.model")}
+            </p>
+            <input
+              type="text"
+              value={settings.model}
+              onChange={(event) => updateSettings({ ...settings, model: event.target.value })}
+              className="mt-2 w-full rounded-[10px] bg-surface-muted px-3 py-2 text-sm text-text outline-none"
+            />
+          </section>
+        )}
+
+        <section className="mt-3 overflow-hidden rounded-[12px] bg-surface px-3 py-3">
+          <p className="text-[11px] font-semibold text-text-tertiary">
+            {t("aiSettings.groupScope")}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {(["self-only", "all"] as const).map((scope) => (
+              <button
+                key={scope}
+                type="button"
+                onClick={() => updateSettings({ ...settings, groupScope: scope })}
+                className={cn(
+                  "h-8 rounded-full border px-3 text-xs transition",
+                  settings.groupScope === scope
+                    ? "border-primary bg-primary-soft text-primary"
+                    : "border-border bg-surface text-text-muted"
+                )}
+              >
+                {t(`aiSettings.groupScope.${scope}`)}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-4 text-text-tertiary">
+            {t(`aiSettings.groupScopeDesc.${settings.groupScope}`)}
+          </p>
+        </section>
+
+        <section className="mt-3 overflow-hidden rounded-[12px] bg-surface px-3 py-3">
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testStatus === "pending"}
+            className={cn(
+              "inline-flex h-9 items-center gap-1 rounded-full bg-primary px-4 text-xs font-semibold text-on-primary transition",
+              testStatus === "pending" ? "opacity-60" : "active:scale-[0.98]"
+            )}
+          >
+            {testStatus === "pending" ? t("aiSettings.testing") : t("aiSettings.test")}
+          </button>
+          {testMessage && (
+            <p
+              className={cn(
+                "mt-2 text-[11px] leading-4",
+                testStatus === "error" ? "text-danger" : "text-text-muted"
+              )}
+            >
+              {testMessage}
+            </p>
+          )}
+          <p className="mt-3 text-[11px] leading-4 text-text-tertiary">
+            {t("aiSettings.privacyNote")}
+          </p>
+        </section>
+      </div>
     </div>
   );
 }
@@ -3430,6 +3838,7 @@ function ThemePreview({ mode }: { mode: ResolvedTheme }) {
 
 function getTabLabel(page: PageType, t: ReturnType<typeof usePreferences>["t"]) {
   if (page === "records") return t("tabs.records");
+  if (page === "schedule") return t("tabs.schedule");
   if (page === "insight") return t("tabs.insight");
   return t("tabs.mine");
 }
