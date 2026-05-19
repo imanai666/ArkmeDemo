@@ -3,7 +3,7 @@ import AdminMessageConsole from "@/pages/AdminMessageConsole";
 import Home from "@/pages/Home";
 import { PreferencesProvider } from "@/settings/preferences";
 
-export type PageType = "records" | "insight" | "mine";
+export type PageType = "records" | "schedule" | "insight" | "mine";
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<PageType>("records");

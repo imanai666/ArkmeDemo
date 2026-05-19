@@ -4796,3 +4796,94 @@ github的readme中，这是一个用于候选人笔试的移动端前端 Demo。
 - 已确认上一轮 README 修改记录存在于当前候选人个人日志和 src/data/aiConversationLog.ts
 - 已确认本地 `main` 与 `origin/main` 起始状态一致
 - pnpm verify:answer 通过
+
+## 2026-05-19 10:46:11 CST (+0800)
+
+### 用户输入
+即我「安排」模块原始需求口述（候选人任务）：以「安排」抽象统一承载待办/日程/任务/提醒/规划等"还没发生但需要后续执行落地的事项"。AI 能从发给自己、私聊、群聊等场景识别用户安排（私聊回复"好的"可在双方安排各生成一条）。需要多条同主题合并、详情保留完整对话上下文。考虑 AI 识别局限（隐喻/缩写），必须保留手动创建。安排核心维度：人、时间、地点；时间维度涵盖截止时间和时间段，提醒是机制。完成机制需手动 + AI 上下文判断双轨；过期不能用刺眼红色，应有"以后再说"的柔和出口，避免堆积焦虑。需用户自带大模型 API。识别场景一次只做一个、迭代式推进。要求候选人先用 AI 梳理需求，再判断核心、定版本节奏，做最小可用并打磨好。
+
+### AI 最终输出
+先按答题规范确认本机会话状态并初始化 `.codex/candidate-session.json` 指向现有的 `candidate-tison-tison-20260515-120159-0f93e8.md`；确认上一轮（2026-05-16 14:04:14「推代码」）已同时存在于个人日志与 `src/data/aiConversationLog.ts`。随后将口述需求拆解为 8 条核心需求与 5 个版本节奏：V1（本轮）只做模块骨架 + 手动创建 + 完成 + 「以后再说」柔和出口；V2 接入用户自带 API + 从「发给自己」做最简识别；V3 私聊/群聊识别 + 同主题合并 + 详情展示对话上下文；V4 日历视图 + AI 上下文自动判断完成；V5 人工 / AI 协助 / AI 全自动 三种执行方式的差异化。本轮按 V1 范围交付：新增 `src/types/schedule.ts` 与 `src/data/scheduleStorage.ts`（带本地存储、跨标签 storage 事件、UID 生成与字段规范化），新增 `src/pages/Schedule.tsx`（页头计数副标题 + 新建按钮、按"今天/未来/无具体时间/以后再说/已完成"分组的列表、空状态、底部弹起的新建表单含标题/日期/时间/地点/相关人/备注、点击勾选完成/反完成、操作单含「以后再说」与「重新激活」/「删除」、过期项使用柔和的灰底而非红色），将 `PageType` 扩展为含 `"schedule"` 并在 `App.tsx`、`Home.tsx` 的 `tabs` 数组、`renderMainContent` 分支、`getTabLabel` 中接入；在 `src/settings/preferences.ts` 为 zh-CN / zh-TW / en-US 三个完整语言包补齐 `tabs.schedule`、`schedule.*` 等 i18n 键，并为 ar-SA 补 `tabs.schedule`。本轮显式不接 AI，所有 i18n 提示中写明"V1 仅手动；AI 自动识别将在下一版接入"，给后续版本预留 `source: "ai" | "manual"` 字段。
+
+### 本轮改动文件
+- .codex/candidate-session.json
+- docs/codex-logs/candidate-tison-tison-20260515-120159-0f93e8.md
+- src/App.tsx
+- src/data/aiConversationLog.ts
+- src/data/scheduleStorage.ts
+- src/pages/Home.tsx
+- src/pages/Schedule.tsx
+- src/settings/preferences.ts
+- src/types/schedule.ts
+
+### 验证结果
+- 已确认上一轮（2026-05-16 14:04:14「推代码」）已写入个人日志和 src/data/aiConversationLog.ts
+- 已初始化 `.codex/candidate-session.json` 指向现有候选人日志
+- pnpm install 完成
+- pnpm lint 通过（首次提示 `splitDateAndTime` 未使用，已删除该未用 helper 后再次通过）
+- pnpm build 通过
+- pnpm verify:codex-log 通过
+- pnpm dev 起服务，localhost:5173 返回 200，已手动停服
+
+## 2026-05-19 11:08:11 CST (+0800)
+
+### 用户输入
+需要实现描述中的所有功能并且能够编译通过，正常运行。
+
+### AI 最终输出
+按口述需求一次性铺开「安排」模块的全部能力，TypeScript / ESLint / 生产构建全部通过：
+
+数据层
+- `src/types/schedule.ts` 扩展为：`timeKind` (none/due/range/reminder)、`startAt`/`endAt`/`reminderAt`/`isReminder`、`sources: ScheduleSourceContext[]`（含 id/type/conversationId/conversationLabel/senderName/senderIsSelf/excerpt/capturedAt）、`executionMode` (manual/ai-assist/ai-auto)、`completedBy`、`completionEvidence`、`aiExecutionResult`。
+- `src/data/scheduleStorage.ts` 向后兼容地 normalize 所有新字段，旧的 V1 数据不会丢失。
+- 新增 `src/data/aiSettings.ts`（provider/apiKey/baseUrl/model/enabled/groupScope，localStorage + 事件广播）。
+
+AI 编排层
+- 新增 `src/lib/aiClient.ts`：支持 OpenAI 兼容 (`/chat/completions`，`response_format: json_object`) 与 Anthropic (`/v1/messages`)，30s 超时、错误回传、JSON 容错解析。
+- 新增 `src/lib/scheduleAnalysis.ts`：系统提示词约束模型只输出 `{creates,merges,completes}`；要求 ISO8601 时间；executionMode 分级判断；附带「群聊范围」过滤（self-only 时只处理 @我/提到我/我发的）；同时实现 demo-mock 启发式（识别"明天/后天/下周/上午/早上"等时间词、"帮我带 A、B、C、D"复合任务、"已经去了/约了"等完成证据），让审阅者无 API Key 也能看到全流程。
+- 新增 `src/lib/scheduleMutations.ts`：把分析结果幂等地应用到本地条目（merges 合并 sources/note，completes 标记 done + 保留 completionEvidence，creates 生成新项）。
+- 新增 `src/lib/scheduleExecutor.ts`：为 `ai-auto` 项调用 LLM 直接产出 `aiExecutionResult` 并自动 done。
+- 新增 `src/lib/scheduleCoordinator.ts`：统一 dedupe 已分析过的 messageId、按 source 类型分别派发 self/private/group 分析、广播 `scheduleAnalysisEvent`。
+
+UI 层
+- `src/pages/Schedule.tsx` 重写：顶部 AI 状态徽章 + 列表/日历切换 + 新建按钮；列表分组（今天/未来/无具体时间/以后再说/已完成）；过期柔和（非红色）；item 行展示标题、执行方式徽章、来源徽章、时间/地点/相关人/来源数量 chip；`ai-auto` 行显示 "AI 执行" 按钮；右侧 `…` 与长按手势打开操作单（编辑/以后再说/重新激活/删除）；点击行进入详情 sheet，里面按"备注 / 相关对话上下文 / AI 完成依据 / AI 执行结果"分块展示，相关对话上下文会列出所有 source 的发送人、时间、原文；新建/编辑表单按时间类型展开"截止时间 / 时间段（start+end）/ 提醒"对应字段；执行方式三选项含文案；月历视图按月渲染、当日/选中态高亮、有安排的日期点亮 dot，下方列出选中日的项目。
+- 在「我的 → 设置」新增 `AiSettingsScreen`：启用开关、provider 选择（OpenAI 兼容 / Anthropic / 本地演示）、API Key（password 输入，仅本地）、Base URL、模型 ID、群聊识别范围（仅与我相关 / 群内所有）、测试连接、隐私说明。
+
+接入层（Home.tsx）
+- 顶层注入 `useCandidateProfile` 拿到 selfName + 维护 `analyzedMessageIdsRef`/`seededAnalyzedMessagesRef`。
+- `createSelfRecord` 在持久化后异步调用 `triggerSelfAnalysis`，把全部历史 selfRecords + 触发消息送入分析。
+- `createTestReply` 按 `summary.conversationType` 路由到 `triggerPrivateAnalysis` 或 `triggerGroupAnalysis`，并把 history 中每条消息的 senderName 解析为对应身份名。
+- 新增 useEffect：种子化已存在的 testMessages → 之后每次 testMessages 变更（来自 `/sendtest` 后台或 storage 事件）扫描新增的 identity 消息，按对话类型派发分析。
+- 在 settingsView 联合类型加入 `"ai"`，SettingsScreen 新增 AI 入口并按当前 enabled / apiKey / demo-mock 状态展示副标题。
+
+i18n
+- zh-CN / zh-TW / en-US 三套完整本地化补齐：tab/section/action/timeKind/execution/calendar/detail/aiBadge/aiSettings.* 全套，并把 sourceLabel 等 fallback 路径补齐；ar-SA 沿用 tabs.schedule fallback。
+
+验证
+- pnpm lint 通过
+- pnpm build (`tsc -b && vite build`) 通过
+- pnpm verify:codex-log / pnpm verify:answer-standard 通过 (`pnpm verify:answer` 一条命令全过)
+- pnpm dev 起服务，`http://localhost:5173/` 与 `http://localhost:5173/sendtest` 均返回 200，模块 source 也能 HMR
+
+### 本轮改动文件
+- src/App.tsx
+- src/data/aiConversationLog.ts
+- src/data/aiSettings.ts
+- src/data/scheduleStorage.ts
+- src/lib/aiClient.ts
+- src/lib/scheduleAnalysis.ts
+- src/lib/scheduleCoordinator.ts
+- src/lib/scheduleExecutor.ts
+- src/lib/scheduleMutations.ts
+- src/pages/Home.tsx
+- src/pages/Schedule.tsx
+- src/settings/preferences.ts
+- src/types/schedule.ts
+- docs/codex-logs/candidate-tison-tison-20260515-120159-0f93e8.md
+
+### 验证结果
+- 已确认上一轮（2026-05-19 10:46:11，V1 安排骨架）已写入个人日志和 src/data/aiConversationLog.ts
+- pnpm lint 通过
+- pnpm build 通过
+- pnpm verify:codex-log / pnpm verify:answer-standard 通过
+- pnpm dev: localhost:5173 / sendtest 均 200，已手动停服
