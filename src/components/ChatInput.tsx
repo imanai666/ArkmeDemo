@@ -13,11 +13,13 @@ export default function ChatInput({ onSubmit, onVoiceSubmit }: ChatInputProps) {
   const { t } = usePreferences();
   const [value, setValue] = useState("");
   const [readOnly, setReadOnly] = useState(true);
+  const [isFocused, setIsFocused] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const hasContent = value.trim().length > 0;
+  const isExpanded = isFocused && !readOnly;
 
   const submit = () => {
     const content = value.trim();
@@ -77,19 +79,30 @@ export default function ChatInput({ onSubmit, onVoiceSubmit }: ChatInputProps) {
   };
 
   return (
-    <div className="shrink-0 bg-bg px-[10px] py-2">
+    <div
+      className={cn(
+        "shrink-0 bg-bg transition-[padding] duration-200 ease-out",
+        isExpanded ? "px-0 py-0" : "px-[10px] py-2"
+      )}
+    >
       <div
         className={cn(
-          "relative rounded-[12px] border border-transparent bg-surface transition-all duration-300 ease-out",
-          isRecording
-            ? "shadow-[0_0_0_1px_var(--primary-ring),0_0_18px_var(--primary-ring)]"
-            : !readOnly
-              ? "shadow-[0_0_0_1px_var(--primary-ring),0_0_10px_var(--primary-ring)]"
-              : "shadow-soft"
+          "relative border border-transparent bg-surface transition-all duration-200 ease-out",
+          isExpanded
+            ? "rounded-none shadow-none"
+            : cn(
+                "rounded-[12px]",
+                isRecording
+                  ? "shadow-[0_0_0_1px_var(--primary-ring),0_0_18px_var(--primary-ring)]"
+                  : !readOnly
+                    ? "shadow-[0_0_0_1px_var(--primary-ring),0_0_10px_var(--primary-ring)]"
+                    : "shadow-soft"
+              )
         )}
       >
         <textarea
           ref={textareaRef}
+          data-mobile-demo-input
           value={value}
           readOnly={readOnly}
           onChange={(event) => setValue(event.target.value)}
@@ -99,8 +112,12 @@ export default function ChatInput({ onSubmit, onVoiceSubmit }: ChatInputProps) {
               submit();
             }
           }}
-          onFocus={() => setReadOnly(false)}
+          onFocus={() => {
+            setReadOnly(false);
+            setIsFocused(true);
+          }}
           onBlur={() => {
+            setIsFocused(false);
             if (!value.trim()) {
               setReadOnly(true);
             }
@@ -116,9 +133,10 @@ export default function ChatInput({ onSubmit, onVoiceSubmit }: ChatInputProps) {
           }}
           placeholder={readOnly || hasContent ? "" : t("composer.textPlaceholder")}
           className={cn(
-            "block w-full resize-none rounded-[12px] bg-surface py-4 pl-4 text-base leading-6 text-text placeholder:text-input-placeholder",
+            "block w-full resize-none bg-surface py-4 pl-4 text-base leading-6 text-text placeholder:text-input-placeholder",
             "focus:outline-none focus-visible:shadow-none",
             "max-h-[168px] min-h-[54px]",
+            isExpanded ? "rounded-none" : "rounded-[12px]",
             hasContent ? "pr-[64px]" : "pr-4"
           )}
           rows={1}

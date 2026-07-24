@@ -95,6 +95,10 @@ body {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03) inset;
 }
 
+.app-screen[data-desktop-keyboard-visible="true"] .mobile-bottom-navigation {
+  display: none;
+}
+
 :root[data-theme="dark"] .app-screen {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.13),

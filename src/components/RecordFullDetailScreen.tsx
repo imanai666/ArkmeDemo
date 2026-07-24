@@ -52,7 +52,7 @@ export default function RecordFullDetailScreen({
             strokeLinejoin="round"
             aria-hidden="true"
           >
-            <path d="M19 12H5M12 19l-7-7 7-7" />
+            <path d="m14 6-6 6 6 6" />
           </svg>
         </button>
         <h1 className="min-w-0 flex-1 truncate text-center text-[18px] font-medium leading-none text-[var(--record-detail-content-text)]">

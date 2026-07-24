@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
+import DesktopVirtualKeyboard from "@/components/DesktopVirtualKeyboard";
 import { cn } from "@/lib/utils";
+
+type EditableField = HTMLInputElement | HTMLTextAreaElement;
+
+function isDemoInput(target: EventTarget | null): target is EditableField {
+  return (
+    (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+    target.dataset.mobileDemoInput !== undefined &&
+    !target.disabled
+  );
+}
 
 function formatStatusTime(date: Date) {
   return date.toLocaleTimeString("zh-CN", {
@@ -16,12 +27,61 @@ export default function AppShell({
   mainPane: React.ReactNode;
   className?: string;
 }) {
+  const [isDesktopPointer, setIsDesktopPointer] = useState(false);
+  const [activeDesktopField, setActiveDesktopField] = useState<EditableField | null>(null);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
+    const updatePointerCapability = () => setIsDesktopPointer(mediaQuery.matches);
+
+    updatePointerCapability();
+    mediaQuery.addEventListener("change", updatePointerCapability);
+
+    return () => mediaQuery.removeEventListener("change", updatePointerCapability);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktopPointer) {
+      setActiveDesktopField(null);
+      return;
+    }
+
+    let blurFrameId: number | null = null;
+
+    const handleFocusIn = (event: FocusEvent) => {
+      if (isDemoInput(event.target)) {
+        setActiveDesktopField(event.target);
+      }
+    };
+    const handleFocusOut = () => {
+      blurFrameId = window.requestAnimationFrame(() => {
+        if (!isDemoInput(document.activeElement)) {
+          setActiveDesktopField(null);
+        }
+      });
+    };
+
+    document.addEventListener("focusin", handleFocusIn);
+    document.addEventListener("focusout", handleFocusOut);
+
+    return () => {
+      document.removeEventListener("focusin", handleFocusIn);
+      document.removeEventListener("focusout", handleFocusOut);
+      if (blurFrameId !== null) {
+        window.cancelAnimationFrame(blurFrameId);
+      }
+    };
+  }, [isDesktopPointer]);
+
+  const isDesktopKeyboardVisible = isDesktopPointer && activeDesktopField !== null;
+
   return (
     <div className="device-stage">
       <div className="device-frame" aria-hidden="true">
         <div className="device-island" />
       </div>
       <div
+        data-desktop-keyboard-visible={isDesktopKeyboardVisible || undefined}
         className={cn(
           "app-screen relative flex flex-col overflow-hidden bg-bg",
           className
@@ -39,6 +99,15 @@ export default function AppShell({
         <section className="relative z-20 flex min-h-0 flex-1 flex-col bg-bg">
           {mainPane}
         </section>
+        {isDesktopKeyboardVisible && activeDesktopField && (
+          <DesktopVirtualKeyboard
+            activeField={activeDesktopField}
+            onClose={() => {
+              activeDesktopField.blur();
+              setActiveDesktopField(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

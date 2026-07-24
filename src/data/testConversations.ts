@@ -32,10 +32,39 @@ export type TestMessage = {
 
 export type TestReadState = Record<string, number>;
 
+export type TestGroupJoinMode = "invite" | "approval" | "public";
+
+export type TestGroupJoinRequest = {
+  id: string;
+  name: string;
+  avatarLabel: string;
+  color: string;
+  message: string;
+  createdAt: number;
+  status: "pending" | "approved" | "rejected";
+};
+
+export type TestChildTopic = {
+  id: string;
+  title: string;
+  createdAt: number;
+};
+
+export type TestGroupSettings = {
+  notificationsEnabled: boolean;
+  hideRecordsOnHome: boolean;
+  privacyLocked: boolean;
+  selfNickname: string;
+  joinMode: TestGroupJoinMode;
+  joinRequests: TestGroupJoinRequest[];
+  childTopics: TestChildTopic[];
+};
+
 export const testIdentitiesStorageKey = "arkme-demo.testIdentities";
 export const testGroupsStorageKey = "arkme-demo.testGroups";
 export const testMessagesStorageKey = "arkme-demo.testMessages";
 export const testReadStateStorageKey = "arkme-demo.testReadState";
+export const testGroupSettingsStorageKey = "arkme-demo.testGroupSettings";
 export const testConversationStorageEvent = "arkme-demo:test-conversations-updated";
 export const demoSenderIdentityId = "demo";
 
@@ -47,6 +76,8 @@ const identityColors = [
   "#F59E0B",
   "#14B8A6",
 ];
+
+const candidateTestGroupId = "group-candidate-test";
 
 const defaultIdentities: TestIdentity[] = [
   {
@@ -65,16 +96,43 @@ const defaultIdentities: TestIdentity[] = [
     color: identityColors[1],
     createdAt: 1760000001000,
   },
+  {
+    id: "identity-user-b",
+    name: "用户B",
+    note: "用于模拟群聊协作者添加",
+    avatarLabel: "B",
+    color: identityColors[3],
+    createdAt: 1760000001500,
+  },
+  ...Array.from({ length: 98 }, (_, index): TestIdentity => {
+    const memberNumber = String(index + 1).padStart(3, "0");
+    return {
+      id: `identity-group-member-${memberNumber}`,
+      name: `群成员${memberNumber}`,
+      note: "候选测试群模拟成员",
+      avatarLabel: memberNumber.slice(-2),
+      color: identityColors[(index + 2) % identityColors.length],
+      createdAt: 1760000002000 + index,
+    };
+  }),
+];
+
+const candidateTestGroupMemberIds = [
+  "identity-interviewer",
+  "identity-user-a",
+  ...defaultIdentities
+    .filter((identity) => identity.id.startsWith("identity-group-member-"))
+    .map((identity) => identity.id),
 ];
 
 const defaultGroups: TestGroup[] = [
   {
-    id: "group-candidate-test",
+    id: candidateTestGroupId,
     name: "候选测试群",
     note: "用于模拟多人群聊测试",
     avatarLabel: "群",
     color: identityColors[2],
-    memberIdentityIds: defaultIdentities.map((identity) => identity.id),
+    memberIdentityIds: candidateTestGroupMemberIds,
     createdAt: 1760000002000,
   },
 ];
@@ -197,6 +255,100 @@ function normalizeGroup(value: unknown, index: number): TestGroup | null {
   };
 }
 
+function createDefaultGroupSettings(): TestGroupSettings {
+  return {
+    notificationsEnabled: true,
+    hideRecordsOnHome: false,
+    privacyLocked: false,
+    selfNickname: "",
+    joinMode: "approval",
+    joinRequests: [
+      {
+        id: "join-request-demo-1",
+        name: "陈晓宇",
+        avatarLabel: "陈",
+        color: identityColors[4],
+        message: "想加入群聊，一起整理面试要点。",
+        createdAt: 1760000003000,
+        status: "pending",
+      },
+      {
+        id: "join-request-demo-2",
+        name: "林曼",
+        avatarLabel: "林",
+        color: identityColors[5],
+        message: "朋友推荐我来申请加入。",
+        createdAt: 1760000004000,
+        status: "pending",
+      },
+    ],
+    childTopics: [],
+  };
+}
+
+function normalizeGroupSettings(value: unknown): TestGroupSettings {
+  const defaults = createDefaultGroupSettings();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaults;
+
+  const settings = value as Partial<TestGroupSettings>;
+  const joinRequests = Array.isArray(settings.joinRequests)
+    ? settings.joinRequests.flatMap((request, index) => {
+        if (!request || typeof request !== "object") return [];
+        const candidate = request as Partial<TestGroupJoinRequest>;
+        const name = normalizeText(candidate.name);
+        if (!name) return [];
+        const status: TestGroupJoinRequest["status"] =
+          candidate.status === "approved" || candidate.status === "rejected"
+            ? candidate.status
+            : "pending";
+        return [{
+          id: normalizeText(candidate.id) || `join-request-${index}`,
+          name,
+          avatarLabel: normalizeText(candidate.avatarLabel) || buildAvatarLabel(name),
+          color: normalizeText(candidate.color) || pickIdentityColor(index + 3),
+          message: normalizeText(candidate.message),
+          createdAt: normalizeTimestamp(candidate.createdAt, Date.now() + index),
+          status,
+        }];
+      })
+    : defaults.joinRequests;
+  const childTopics = Array.isArray(settings.childTopics)
+    ? settings.childTopics.flatMap((topic, index) => {
+        if (!topic || typeof topic !== "object") return [];
+        const candidate = topic as Partial<TestChildTopic>;
+        const title = normalizeText(candidate.title);
+        if (!title) return [];
+        return [{
+          id: normalizeText(candidate.id) || `child-topic-${index}`,
+          title,
+          createdAt: normalizeTimestamp(candidate.createdAt, Date.now() + index),
+        }];
+      })
+    : [];
+
+  return {
+    notificationsEnabled:
+      typeof settings.notificationsEnabled === "boolean"
+        ? settings.notificationsEnabled
+        : defaults.notificationsEnabled,
+    hideRecordsOnHome:
+      typeof settings.hideRecordsOnHome === "boolean"
+        ? settings.hideRecordsOnHome
+        : defaults.hideRecordsOnHome,
+    privacyLocked:
+      typeof settings.privacyLocked === "boolean"
+        ? settings.privacyLocked
+        : defaults.privacyLocked,
+    selfNickname: normalizeText(settings.selfNickname),
+    joinMode:
+      settings.joinMode === "invite" || settings.joinMode === "public"
+        ? settings.joinMode
+        : "approval",
+    joinRequests,
+    childTopics,
+  };
+}
+
 export function getInitialTestIdentities() {
   const parsedValue = readJsonValue(testIdentitiesStorageKey);
   if (!Array.isArray(parsedValue)) return defaultIdentities;
@@ -205,7 +357,15 @@ export function getInitialTestIdentities() {
     .map(normalizeIdentity)
     .filter((identity): identity is TestIdentity => Boolean(identity));
 
-  return identities.length > 0 ? identities : defaultIdentities;
+  if (identities.length === 0) return defaultIdentities;
+
+  // Add newly introduced built-in demo identities without overwriting user-created entries.
+  return [
+    ...identities,
+    ...defaultIdentities.filter(
+      (defaultIdentity) => !identities.some((identity) => identity.id === defaultIdentity.id)
+    ),
+  ];
 }
 
 export function getInitialTestGroups() {
@@ -216,7 +376,19 @@ export function getInitialTestGroups() {
     .map(normalizeGroup)
     .filter((group): group is TestGroup => Boolean(group));
 
-  return groups.length > 0 ? groups : defaultGroups;
+  if (groups.length === 0) return defaultGroups;
+
+  return groups.map((group) => {
+    const isLegacyCandidateTestGroup =
+      group.id === candidateTestGroupId &&
+      group.memberIdentityIds.length === 2 &&
+      group.memberIdentityIds.includes("identity-interviewer") &&
+      group.memberIdentityIds.includes("identity-user-a");
+
+    return isLegacyCandidateTestGroup
+      ? { ...group, memberIdentityIds: candidateTestGroupMemberIds }
+      : group;
+  });
 }
 
 export function getInitialTestMessages() {
@@ -243,6 +415,14 @@ export function getInitialTestReadState() {
   );
 }
 
+export function getInitialTestGroupSettings(groupId: string) {
+  const parsedValue = readJsonValue(testGroupSettingsStorageKey);
+  if (!parsedValue || typeof parsedValue !== "object" || Array.isArray(parsedValue)) {
+    return createDefaultGroupSettings();
+  }
+  return normalizeGroupSettings((parsedValue as Record<string, unknown>)[groupId]);
+}
+
 export function persistTestIdentities(identities: TestIdentity[]) {
   writeJsonValue(testIdentitiesStorageKey, identities);
   notifyTestConversationChange();
@@ -260,6 +440,19 @@ export function persistTestMessages(messages: TestMessage[]) {
 
 export function persistTestReadState(readState: TestReadState) {
   writeJsonValue(testReadStateStorageKey, readState);
+}
+
+export function persistTestGroupSettings(groupId: string, settings: TestGroupSettings) {
+  const parsedValue = readJsonValue(testGroupSettingsStorageKey);
+  const storedSettings =
+    parsedValue && typeof parsedValue === "object" && !Array.isArray(parsedValue)
+      ? parsedValue as Record<string, TestGroupSettings>
+      : {};
+  writeJsonValue(testGroupSettingsStorageKey, {
+    ...storedSettings,
+    [groupId]: settings,
+  });
+  notifyTestConversationChange();
 }
 
 export function notifyTestConversationChange() {

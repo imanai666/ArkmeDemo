@@ -11,20 +11,25 @@ import { useCandidateProfile } from "@/data/candidateProfile";
 import {
   createTestReplyMessage,
   demoSenderIdentityId,
+  getInitialTestGroupSettings,
   getInitialTestGroups,
   getInitialTestIdentities,
   getInitialTestMessages,
   getInitialTestReadState,
   getPrivateConversationId,
+  persistTestGroups,
+  persistTestGroupSettings,
   persistTestMessages,
   persistTestReadState,
   testConversationStorageEvent,
+  testGroupSettingsStorageKey,
   testGroupsStorageKey,
   testIdentitiesStorageKey,
   testMessagesStorageKey,
   testReadStateStorageKey,
   type TestConversationType,
   type TestGroup,
+  type TestGroupSettings,
   type TestIdentity,
   type TestMessage,
   type TestReadState,
@@ -384,7 +389,8 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
         event.key !== testIdentitiesStorageKey &&
         event.key !== testGroupsStorageKey &&
         event.key !== testMessagesStorageKey &&
-        event.key !== testReadStateStorageKey
+        event.key !== testReadStateStorageKey &&
+        event.key !== testGroupSettingsStorageKey
       ) {
         return;
       }
@@ -398,6 +404,19 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
       window.removeEventListener(testConversationStorageEvent, refreshTestConversations);
     };
   }, []);
+
+  const updateTestGroup = React.useCallback(
+    (groupId: string, update: (group: TestGroup) => TestGroup) => {
+      setTestGroups((groups) => {
+        const nextGroups = groups.map((group) =>
+          group.id === groupId ? update(group) : group
+        );
+        persistTestGroups(nextGroups);
+        return nextGroups;
+      });
+    },
+    []
+  );
 
   const markAiConversationAsRead = React.useCallback(() => {
     setLastReadAiConversationCount(aiConversationTotalCount);
@@ -1133,6 +1152,8 @@ export default function Home({ currentPage, onNavigate }: HomeProps) {
           onOpenRecordDetail={setRecordDetail}
           onOpenRecordSnapshot={setRecordSnapshot}
           onCreateReply={(content) => createTestReply(activeTestConversationSummary, content)}
+          allIdentities={testIdentities}
+          onUpdateGroup={updateTestGroup}
         />
       );
     }
@@ -1321,6 +1342,7 @@ function SearchScreen({
       <header className="flex h-[50px] shrink-0 items-center bg-bg pl-2.5">
         <div className="relative min-w-0 flex-1">
           <input
+            data-mobile-demo-input
             value={searchQuery}
             onChange={(event) => {
               onChangeSearchQuery(event.target.value);
@@ -2186,7 +2208,7 @@ function AiToolConversationChat({
           aria-label={t("common.back")}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
+            <path d="m14 6-6 6 6 6" />
           </svg>
         </button>
         <div className="ml-1 flex min-w-0 items-center gap-2">
@@ -2338,7 +2360,7 @@ function SendToSelfConversationChat({
           aria-label={t("common.back")}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
+            <path d="m14 6-6 6 6 6" />
           </svg>
         </button>
         <div className="ml-1 flex min-w-0 items-center gap-2">
@@ -2381,6 +2403,8 @@ function TestIdentityConversationChat({
   onOpenRecordDetail,
   onOpenRecordSnapshot,
   onCreateReply,
+  allIdentities,
+  onUpdateGroup,
 }: {
   summary: TestConversationSummary;
   targetUid?: string | null;
@@ -2388,10 +2412,13 @@ function TestIdentityConversationChat({
   onOpenRecordDetail: (record: RecordItem) => void;
   onOpenRecordSnapshot: (record: RecordItem) => void;
   onCreateReply: (content: string) => void;
+  allIdentities: TestIdentity[];
+  onUpdateGroup: (groupId: string, update: (group: TestGroup) => TestGroup) => void;
 }) {
   const { resolvedLocale, t } = usePreferences();
   const candidateProfile = useCandidateProfile();
   const selfDisplayName = candidateProfile?.name || t("recordDetail.me");
+  const [showGroupSettings, setShowGroupSettings] = React.useState(false);
   const scrollContainerRef = React.useRef<HTMLDivElement>(null);
   const recordRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
   const sortedRecords = React.useMemo(
@@ -2412,7 +2439,7 @@ function TestIdentityConversationChat({
   }, [sortedRecords.length, targetUid]);
 
   return (
-    <div className="flex h-full flex-col bg-bg">
+    <div className="relative flex h-full flex-col bg-bg">
       <header className="flex h-14 shrink-0 items-center border-b border-border-light bg-bg px-2">
         <button
           type="button"
@@ -2421,11 +2448,13 @@ function TestIdentityConversationChat({
           aria-label={t("common.back")}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
+            <path d="m14 6-6 6 6 6" />
           </svg>
         </button>
-        <div className="ml-1 flex min-w-0 items-center gap-2">
-          <TestConversationAvatar summary={summary} className="h-8 w-8" />
+        <div className="ml-1 flex min-w-0 flex-1 items-center gap-2">
+          {summary.conversationType !== "group" && (
+            <TestConversationAvatar summary={summary} className="h-8 w-8" />
+          )}
           <div className="min-w-0">
             <h1 className="truncate text-[17px] font-semibold leading-5 text-text">
               {summary.title}
@@ -2435,6 +2464,16 @@ function TestIdentityConversationChat({
             </p>
           </div>
         </div>
+        {summary.conversationType === "group" && (
+          <button
+            type="button"
+            className="ml-2 flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition hover:bg-hover-overlay active:scale-[0.96]"
+            onClick={() => setShowGroupSettings(true)}
+            aria-label={`打开${summary.title}群聊设置`}
+          >
+            <TestConversationAvatar summary={summary} className="h-8 w-8" />
+          </button>
+        )}
       </header>
 
       <div
@@ -2523,8 +2562,618 @@ function TestIdentityConversationChat({
         onSubmit={onCreateReply}
         onVoiceSubmit={() => onCreateReply(t("records.voiceRecord"))}
       />
+      {showGroupSettings && (
+        <GroupSettingsPanel
+          summary={summary}
+          allIdentities={allIdentities}
+          onUpdateGroup={onUpdateGroup}
+          onClose={() => setShowGroupSettings(false)}
+        />
+      )}
     </div>
   );
+}
+
+type GroupSettingsView =
+  | "main"
+  | "members"
+  | "invite"
+  | "join"
+  | "requests"
+  | "nickname"
+  | "search"
+  | "children"
+  | "media"
+  | "danger";
+
+function GroupSettingsPanel({
+  summary,
+  allIdentities,
+  onUpdateGroup,
+  onClose,
+}: {
+  summary: TestConversationSummary;
+  allIdentities: TestIdentity[];
+  onUpdateGroup: (groupId: string, update: (group: TestGroup) => TestGroup) => void;
+  onClose: () => void;
+}) {
+  const [view, setView] = React.useState<GroupSettingsView>("main");
+  const [settings, setSettings] = React.useState<TestGroupSettings>(() =>
+    getInitialTestGroupSettings(summary.group?.id ?? summary.conversationId)
+  );
+  const [memberSearch, setMemberSearch] = React.useState("");
+  const [memberEditMode, setMemberEditMode] = React.useState(false);
+  const [selectedMemberIds, setSelectedMemberIds] = React.useState<string[]>([]);
+  const [nicknameDraft, setNicknameDraft] = React.useState(settings.selfNickname);
+  const [recordSearch, setRecordSearch] = React.useState("");
+  const [childTopicDraft, setChildTopicDraft] = React.useState("");
+  const [notice, setNotice] = React.useState("");
+  const [dangerAction, setDangerAction] = React.useState<"exit" | "dissolve" | null>(null);
+  const groupId = summary.group?.id ?? summary.conversationId;
+  const memberCount = summary.memberIdentities.length;
+  const members = summary.memberIdentities;
+  const availableIdentities = allIdentities.filter(
+    (identity) => !summary.group?.memberIdentityIds.includes(identity.id)
+  );
+
+  const updateSettings = (update: (current: TestGroupSettings) => TestGroupSettings) => {
+    setSettings((current) => {
+      const next = update(current);
+      persistTestGroupSettings(groupId, next);
+      return next;
+    });
+  };
+
+  const openView = (nextView: Exclude<GroupSettingsView, "main">) => {
+    setView(nextView);
+    setNotice("");
+  };
+
+  const returnToMain = () => {
+    if (view !== "main") {
+      setView("main");
+      setNotice("");
+      setDangerAction(null);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <section className="absolute inset-0 z-30 flex flex-col bg-bg" role="dialog" aria-modal="true" aria-label={`${summary.title}群聊设置`}>
+      {view === "main" ? (
+        <button
+          type="button"
+          className="absolute left-3 top-2 z-10 flex h-10 w-10 items-center justify-center text-[28px] font-light leading-none text-text-muted transition hover:bg-hover-overlay active:scale-[0.96]"
+          onClick={returnToMain}
+          aria-label="返回群聊"
+        >
+          &lt;
+        </button>
+      ) : (
+        <header className="flex h-14 shrink-0 items-center border-b border-border-light bg-surface px-3">
+          <button
+            type="button"
+            className="flex h-10 w-10 items-center justify-center text-[28px] font-light leading-none text-text-muted transition hover:bg-hover-overlay active:scale-[0.96]"
+            onClick={returnToMain}
+            aria-label="返回群聊设置"
+          >
+            &lt;
+          </button>
+          <h2 className="flex-1 pr-10 text-center text-[17px] font-semibold text-text">
+            {getGroupSettingsViewTitle(view)}
+          </h2>
+        </header>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-8">
+        {view === "main" ? (
+          <GroupSettingsMain
+            summary={summary}
+            memberCount={memberCount}
+            settings={settings}
+            onOpenView={openView}
+            onUpdateSettings={updateSettings}
+          />
+        ) : (
+          <GroupSettingsDetail
+            view={view}
+            summary={summary}
+            members={members}
+            availableIdentities={availableIdentities}
+            settings={settings}
+            memberSearch={memberSearch}
+            memberEditMode={memberEditMode}
+            selectedMemberIds={selectedMemberIds}
+            nicknameDraft={nicknameDraft}
+            recordSearch={recordSearch}
+            childTopicDraft={childTopicDraft}
+            notice={notice}
+            dangerAction={dangerAction}
+            onSetMemberSearch={setMemberSearch}
+            onSetMemberEditMode={setMemberEditMode}
+            onToggleSelectedMember={(identityId) => {
+              setSelectedMemberIds((current) =>
+                current.includes(identityId)
+                  ? current.filter((id) => id !== identityId)
+                  : [...current, identityId]
+              );
+            }}
+            onAddMembers={() => {
+              if (selectedMemberIds.length === 0) return;
+              onUpdateGroup(groupId, (group) => ({
+                ...group,
+                memberIdentityIds: Array.from(
+                  new Set([...group.memberIdentityIds, ...selectedMemberIds])
+                ),
+              }));
+              setNotice(`已添加 ${selectedMemberIds.length} 位协作者`);
+              setSelectedMemberIds([]);
+            }}
+            onRemoveMember={(identityId) => {
+              onUpdateGroup(groupId, (group) => ({
+                ...group,
+                memberIdentityIds: group.memberIdentityIds.filter((id) => id !== identityId),
+              }));
+              setNotice("已移除协作者");
+            }}
+            onUpdateSettings={updateSettings}
+            onSetNicknameDraft={setNicknameDraft}
+            onSaveNickname={() => {
+              updateSettings((current) => ({ ...current, selfNickname: nicknameDraft.trim() }));
+              setNotice("群内昵称已保存");
+            }}
+            onSetRecordSearch={setRecordSearch}
+            onSetChildTopicDraft={setChildTopicDraft}
+            onCreateChildTopic={() => {
+              const title = childTopicDraft.trim();
+              if (!title) return;
+              updateSettings((current) => ({
+                ...current,
+                childTopics: [
+                  ...current.childTopics,
+                  { id: `child-topic-${Date.now()}`, title, createdAt: Date.now() },
+                ],
+              }));
+              setChildTopicDraft("");
+              setNotice("子主题已创建");
+            }}
+            onCopyInvite={() => {
+              const inviteLink = `jiwo://group/${groupId}?invite=demo`;
+              void window.navigator.clipboard?.writeText(inviteLink).catch(() => undefined);
+              setNotice("邀请链接已复制");
+            }}
+            onPrepareExport={() => setNotice("主题数据已准备导出（本地模拟）")}
+            onSetDangerAction={setDangerAction}
+            onConfirmDanger={() => {
+              if (dangerAction === "exit") setNotice("已退出群聊（本地模拟）");
+              if (dangerAction === "dissolve") setNotice("群聊已解散（本地模拟）");
+              setDangerAction(null);
+            }}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function GroupSettingsMain({
+  summary,
+  memberCount,
+  settings,
+  onOpenView,
+  onUpdateSettings,
+}: {
+  summary: TestConversationSummary;
+  memberCount: number;
+  settings: TestGroupSettings;
+  onOpenView: (view: Exclude<GroupSettingsView, "main">) => void;
+  onUpdateSettings: (update: (current: TestGroupSettings) => TestGroupSettings) => void;
+}) {
+  const pendingRequestCount = settings.joinRequests.filter((request) => request.status === "pending").length;
+  const [moreExpanded, setMoreExpanded] = React.useState(false);
+  const moreMenuRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!moreExpanded) return;
+
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (event.target instanceof Node && !moreMenuRef.current?.contains(event.target)) {
+        setMoreExpanded(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreExpanded(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePress);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [moreExpanded]);
+
+  const openViewFromMore = (view: Exclude<GroupSettingsView, "main">) => {
+    setMoreExpanded(false);
+    onOpenView(view);
+  };
+
+  return (
+    <>
+      <div className="px-5 pb-5 pt-3 text-center">
+        <TestConversationAvatar summary={summary} className="mx-auto h-[72px] w-[72px] text-[24px]" />
+        <h3 className="mt-3 text-[20px] font-semibold leading-6 text-text">{summary.title}</h3>
+      </div>
+
+      <section className="border-y border-border-light bg-surface px-4 py-4">
+        <div className="grid grid-cols-4 gap-y-5">
+          <GroupSettingShortcut icon={<LinkIcon />} label="邀请协作者" onClick={() => onOpenView("invite")} />
+          <GroupSettingShortcut icon={<ShieldIcon />} label="加入方式" onClick={() => onOpenView("join")} />
+          <GroupSettingShortcut icon={<MembersIcon />} label="入群申请" hint={pendingRequestCount ? `${pendingRequestCount}` : undefined} onClick={() => onOpenView("requests")} />
+          <GroupSettingShortcut icon={<BellIcon />} label="群通知" onClick={() => onUpdateSettings((current) => ({ ...current, notificationsEnabled: !current.notificationsEnabled }))} />
+          <GroupSettingShortcut icon={<EditIcon />} label="我的群昵称" onClick={() => onOpenView("nickname")} />
+          <GroupSettingShortcut icon={<SearchIcon />} label="搜索快记" onClick={() => onOpenView("search")} />
+          <div ref={moreMenuRef} className="relative min-w-0">
+            <GroupSettingShortcut
+              icon={<MoreIcon expanded={moreExpanded} />}
+              label="更多"
+              ariaExpanded={moreExpanded}
+              ariaHaspopup="dialog"
+              onClick={() => setMoreExpanded((expanded) => !expanded)}
+            />
+            {moreExpanded && (
+              <section
+                role="dialog"
+                aria-label="更多群聊设置"
+                className="absolute right-0 top-[calc(100%+8px)] z-30 max-h-[min(360px,60vh)] w-[min(280px,calc(100vw-32px))] overflow-y-auto rounded-lg border border-border-light bg-surface py-1 shadow-[0_10px_30px_rgba(15,23,42,0.18)]"
+              >
+                <GroupSettingRow icon={<MediaIcon />} label="媒体、文件和链接" onClick={() => openViewFromMore("media")} />
+                <GroupSettingRow
+                  icon={<BookmarkIcon />}
+                  label="首页不显示群快记"
+                  trailing={<SettingSwitch checked={settings.hideRecordsOnHome} onChange={(checked) => onUpdateSettings((current) => ({ ...current, hideRecordsOnHome: checked }))} label="首页显示群快记" />}
+                />
+                <GroupSettingRow icon={<BranchIcon />} label="新建子主题" value={settings.childTopics.length ? `${settings.childTopics.length}` : undefined} onClick={() => openViewFromMore("children")} />
+                <GroupSettingRow
+                  icon={<LockIcon />}
+                  label="隐私锁"
+                  value={settings.privacyLocked ? "已开启" : "未开启"}
+                  trailing={<SettingSwitch checked={settings.privacyLocked} onChange={(checked) => onUpdateSettings((current) => ({ ...current, privacyLocked: checked }))} label="隐私锁" />}
+                />
+                <GroupSettingRow icon={<DownloadIcon />} label="导出主题数据" onClick={() => openViewFromMore("danger")} />
+                <GroupSettingRow icon={<MoreIcon />} label="退出群聊和解散群聊" onClick={() => openViewFromMore("danger")} />
+              </section>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="pt-5">
+        <div className="flex items-center px-5 pb-3">
+          <h4 className="text-[16px] font-semibold text-text">全部成员（{memberCount}）</h4>
+          <button type="button" onClick={() => onOpenView("members")} className="ml-auto text-[13px] text-primary">管理协作者</button>
+        </div>
+        <div className="border-y border-border-light bg-surface">
+          {summary.memberIdentities.map((identity, index) => (
+            <button
+              key={identity.id}
+              type="button"
+              onClick={() => onOpenView("members")}
+              className="flex min-h-[68px] w-full items-center gap-3 border-b border-border-light px-5 text-left last:border-b-0 transition hover:bg-hover-overlay active:bg-hover-overlay"
+            >
+              <TestIdentityAvatar identity={identity} className="h-11 w-11 shrink-0 text-[14px]" />
+              <span className="min-w-0 flex-1 truncate text-[15px] text-text">{identity.name}</span>
+              <span className="shrink-0 text-[13px] text-text-tertiary">{index === 0 ? "群主" : "成员"}</span>
+            </button>
+          ))}
+          {summary.memberIdentities.length === 0 && <p className="px-5 py-6 text-center text-[14px] text-text-tertiary">暂未添加群成员</p>}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function GroupSettingShortcut({
+  icon,
+  label,
+  hint,
+  ariaExpanded,
+  ariaHaspopup,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint?: string;
+  ariaExpanded?: boolean;
+  ariaHaspopup?: React.AriaAttributes["aria-haspopup"];
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick} aria-expanded={ariaExpanded} aria-haspopup={ariaHaspopup} className="flex w-full min-w-0 flex-col items-center text-center text-text transition active:scale-[0.96]">
+      <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-primary-soft text-primary">
+        {icon}
+        {hint && <span className="absolute -right-2 -top-1 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] leading-4 text-white">{hint}</span>}
+      </span>
+      <span className="mt-1.5 max-w-full truncate text-[12px] leading-4">{label}</span>
+    </button>
+  );
+}
+
+function GroupSettingsDetail({
+  view,
+  summary,
+  members,
+  availableIdentities,
+  settings,
+  memberSearch,
+  memberEditMode,
+  selectedMemberIds,
+  nicknameDraft,
+  recordSearch,
+  childTopicDraft,
+  notice,
+  dangerAction,
+  onSetMemberSearch,
+  onSetMemberEditMode,
+  onToggleSelectedMember,
+  onAddMembers,
+  onRemoveMember,
+  onUpdateSettings,
+  onSetNicknameDraft,
+  onSaveNickname,
+  onSetRecordSearch,
+  onSetChildTopicDraft,
+  onCreateChildTopic,
+  onCopyInvite,
+  onPrepareExport,
+  onSetDangerAction,
+  onConfirmDanger,
+}: {
+  view: Exclude<GroupSettingsView, "main">;
+  summary: TestConversationSummary;
+  members: TestIdentity[];
+  availableIdentities: TestIdentity[];
+  settings: TestGroupSettings;
+  memberSearch: string;
+  memberEditMode: boolean;
+  selectedMemberIds: string[];
+  nicknameDraft: string;
+  recordSearch: string;
+  childTopicDraft: string;
+  notice: string;
+  dangerAction: "exit" | "dissolve" | null;
+  onSetMemberSearch: (value: string) => void;
+  onSetMemberEditMode: (value: boolean) => void;
+  onToggleSelectedMember: (identityId: string) => void;
+  onAddMembers: () => void;
+  onRemoveMember: (identityId: string) => void;
+  onUpdateSettings: (update: (current: TestGroupSettings) => TestGroupSettings) => void;
+  onSetNicknameDraft: (value: string) => void;
+  onSaveNickname: () => void;
+  onSetRecordSearch: (value: string) => void;
+  onSetChildTopicDraft: (value: string) => void;
+  onCreateChildTopic: () => void;
+  onCopyInvite: () => void;
+  onPrepareExport: () => void;
+  onSetDangerAction: (action: "exit" | "dissolve" | null) => void;
+  onConfirmDanger: () => void;
+}) {
+  const filteredMembers = members.filter((identity) =>
+    identity.name.toLocaleLowerCase().includes(memberSearch.trim().toLocaleLowerCase())
+  );
+  const filteredAvailableIdentities = availableIdentities.filter((identity) =>
+    identity.name.toLocaleLowerCase().includes(memberSearch.trim().toLocaleLowerCase())
+  );
+  const matchingRecords = summary.records.filter((record) =>
+    record.text_content.toLocaleLowerCase().includes(recordSearch.trim().toLocaleLowerCase())
+  );
+  const pendingRequests = settings.joinRequests.filter((request) => request.status === "pending");
+
+  if (view === "members") {
+    const showingAddCandidates = memberEditMode;
+    const displayedMembers = showingAddCandidates ? filteredAvailableIdentities : filteredMembers;
+    return (
+      <section className="pt-2">
+        <div className="px-4 pb-3">
+          <div className="flex h-10 items-center gap-2 rounded-lg bg-surface-2 px-3 text-text-tertiary">
+            <SearchIcon />
+            <input value={memberSearch} onChange={(event) => onSetMemberSearch(event.target.value)} placeholder={showingAddCandidates ? "搜索可添加的协作者" : "搜索协作者"} className="min-w-0 flex-1 bg-transparent text-[14px] text-text outline-none placeholder:text-text-tertiary" />
+          </div>
+        </div>
+        <div className="flex items-center justify-between px-4 pb-2">
+          <p className="text-[13px] text-text-tertiary">{showingAddCandidates ? "从已有测试身份中添加" : `${members.length} 位协作者`}</p>
+          <button type="button" onClick={() => { onSetMemberEditMode(!memberEditMode); onSetMemberSearch(""); }} className="text-[14px] font-medium text-primary">
+            {showingAddCandidates ? "查看成员" : "添加协作者"}
+          </button>
+        </div>
+        <div className="border-y border-border-light bg-surface">
+          {displayedMembers.map((identity, index) => {
+            const isOwner = !showingAddCandidates && index === 0;
+            const selected = selectedMemberIds.includes(identity.id);
+            return (
+              <div key={identity.id} className="flex min-h-16 items-center gap-3 px-4">
+                <TestIdentityAvatar identity={identity} className="h-10 w-10 text-[13px]" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[15px] font-medium text-text">{identity.name}</p>
+                  <p className="mt-0.5 truncate text-[12px] text-text-tertiary">{isOwner ? "群主" : identity.note || "协作者"}</p>
+                </div>
+                {showingAddCandidates ? (
+                  <button type="button" onClick={() => onToggleSelectedMember(identity.id)} className={cn("flex h-7 w-7 items-center justify-center rounded-full border transition", selected ? "border-primary bg-primary text-white" : "border-border text-text-tertiary")} aria-label={selected ? `取消选择${identity.name}` : `选择${identity.name}`}>
+                    {selected && <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>}
+                  </button>
+                ) : !isOwner ? (
+                  <button type="button" onClick={() => onRemoveMember(identity.id)} className="text-[13px] text-[#D84B4B]">移除</button>
+                ) : null}
+              </div>
+            );
+          })}
+          {displayedMembers.length === 0 && <p className="px-4 py-6 text-[14px] text-text-tertiary">{showingAddCandidates ? "没有可添加的测试身份" : "未找到协作者"}</p>}
+        </div>
+        {showingAddCandidates && <div className="p-4"><button type="button" disabled={selectedMemberIds.length === 0} onClick={onAddMembers} className="h-11 w-full rounded-lg bg-primary text-[15px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-45">添加 {selectedMemberIds.length ? `${selectedMemberIds.length} 位协作者` : "协作者"}</button></div>}
+        <GroupSettingsNotice notice={notice} />
+      </section>
+    );
+  }
+
+  if (view === "invite") {
+    return <section className="px-5 pt-6 text-center"><div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary-soft text-primary"><LinkIcon /></div><h3 className="mt-4 text-[18px] font-semibold text-text">邀请协作者加入群聊</h3><p className="mt-2 text-[13px] leading-5 text-text-tertiary">生成的邀请链接仅用于本地 Demo 演示。</p><div className="mt-5 flex items-center gap-2 rounded-lg border border-border-light bg-surface px-3 py-3 text-left"><span className="min-w-0 flex-1 truncate text-[13px] text-text-muted">jiwo://group/{summary.conversationId}?invite=demo</span><button type="button" onClick={onCopyInvite} className="shrink-0 text-[14px] font-medium text-primary">复制</button></div><GroupSettingsNotice notice={notice} /></section>;
+  }
+
+  if (view === "join") {
+    return <section className="pt-3"><p className="px-5 pb-2 text-[13px] text-text-tertiary">选择谁可以加入这个群聊</p><GroupSettingsSection>{(["invite", "approval", "public"] as const).map((mode) => <button type="button" key={mode} onClick={() => onUpdateSettings((current) => ({ ...current, joinMode: mode }))} className="flex min-h-16 w-full items-center gap-3 px-4 text-left transition hover:bg-hover-overlay"><span className={cn("flex h-5 w-5 items-center justify-center rounded-full border", settings.joinMode === mode ? "border-primary" : "border-border")}>{settings.joinMode === mode && <span className="h-2.5 w-2.5 rounded-full bg-primary" />}</span><span className="min-w-0 flex-1"><span className="block text-[15px] text-text">{getJoinModeLabel(mode)}</span><span className="mt-1 block text-[12px] text-text-tertiary">{getJoinModeDescription(mode)}</span></span></button>)}</GroupSettingsSection></section>;
+  }
+
+  if (view === "requests") {
+    return <section className="pt-3"><div className="border-y border-border-light bg-surface">{pendingRequests.map((request) => <div key={request.id} className="flex min-h-20 items-center gap-3 px-4"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold text-white" style={{ backgroundColor: request.color }}>{request.avatarLabel}</div><div className="min-w-0 flex-1"><p className="text-[15px] font-medium text-text">{request.name}</p><p className="mt-0.5 truncate text-[12px] text-text-tertiary">{request.message || "申请加入群聊"}</p></div><div className="flex gap-2"><button type="button" onClick={() => onUpdateSettings((current) => ({ ...current, joinRequests: current.joinRequests.map((item) => item.id === request.id ? { ...item, status: "rejected" } : item) }))} className="text-[13px] text-text-tertiary">拒绝</button><button type="button" onClick={() => onUpdateSettings((current) => ({ ...current, joinRequests: current.joinRequests.map((item) => item.id === request.id ? { ...item, status: "approved" } : item) }))} className="text-[13px] font-medium text-primary">同意</button></div></div>)}</div>{pendingRequests.length === 0 && <p className="px-5 py-10 text-center text-[14px] text-text-tertiary">暂无待处理申请</p>}</section>;
+  }
+
+  if (view === "nickname") {
+    return <section className="p-5"><label className="text-[13px] text-text-tertiary" htmlFor="group-nickname">只在这个群聊中展示</label><input id="group-nickname" value={nicknameDraft} onChange={(event) => onSetNicknameDraft(event.target.value)} maxLength={24} placeholder="输入群内昵称" className="mt-2 h-11 w-full rounded-lg border border-border-light bg-surface px-3 text-[15px] text-text outline-none focus:border-primary" /><button type="button" onClick={onSaveNickname} className="mt-4 h-11 w-full rounded-lg bg-primary text-[15px] font-medium text-white">保存</button><GroupSettingsNotice notice={notice} /></section>;
+  }
+
+  if (view === "search") {
+    return <section className="pt-3"><div className="px-4"><div className="flex h-10 items-center gap-2 rounded-lg bg-surface-2 px-3 text-text-tertiary"><SearchIcon /><input value={recordSearch} onChange={(event) => onSetRecordSearch(event.target.value)} placeholder="搜索群内快记" className="min-w-0 flex-1 bg-transparent text-[14px] text-text outline-none placeholder:text-text-tertiary" /></div></div><div className="mt-3 border-y border-border-light bg-surface">{recordSearch.trim() ? matchingRecords.map((record) => <div key={record.uid} className="border-b border-border-light px-4 py-3 last:border-b-0"><p className="text-[14px] leading-5 text-text">{record.text_content}</p><p className="mt-1 text-[12px] text-text-tertiary">{formatBubbleTime(record.send_at)}</p></div>) : <p className="px-4 py-8 text-center text-[14px] text-text-tertiary">输入关键词搜索群内快记</p>}{recordSearch.trim() && matchingRecords.length === 0 && <p className="px-4 py-8 text-center text-[14px] text-text-tertiary">没有找到相关快记</p>}</div></section>;
+  }
+
+  if (view === "media") {
+    return <section className="px-5 py-10 text-center"><MediaIcon /><p className="mt-3 text-[15px] text-text">媒体、文件和链接</p><p className="mt-2 text-[13px] text-text-tertiary">当前群聊还没有可归类的内容。</p></section>;
+  }
+
+  if (view === "children") {
+    return <section className="pt-3"><div className="flex gap-2 px-4"><input value={childTopicDraft} onChange={(event) => onSetChildTopicDraft(event.target.value)} maxLength={30} placeholder="输入子主题名称" className="h-10 min-w-0 flex-1 rounded-lg border border-border-light bg-surface px-3 text-[14px] text-text outline-none focus:border-primary" /><button type="button" onClick={onCreateChildTopic} className="h-10 shrink-0 rounded-lg bg-primary px-4 text-[14px] font-medium text-white">创建</button></div><div className="mt-4 border-y border-border-light bg-surface">{settings.childTopics.map((topic) => <div key={topic.id} className="flex min-h-14 items-center px-4"><span className="min-w-0 flex-1 truncate text-[15px] text-text">{topic.title}</span><span className="text-[12px] text-text-tertiary">子主题</span></div>)}{settings.childTopics.length === 0 && <p className="px-4 py-8 text-center text-[14px] text-text-tertiary">还没有子主题</p>}</div><GroupSettingsNotice notice={notice} /></section>;
+  }
+
+  return <section className="pt-3"><GroupSettingsSection title="数据"><button type="button" onClick={onPrepareExport} className="flex min-h-14 w-full items-center px-4 text-left text-[15px] text-text"><span className="flex h-7 w-7 items-center justify-center text-text-tertiary"><DownloadIcon /></span><span className="ml-3 flex-1">导出主题数据</span><span className="text-[13px] text-primary">准备导出</span></button></GroupSettingsSection><GroupSettingsSection title="危险操作"><button type="button" onClick={() => onSetDangerAction("exit")} className="flex min-h-14 w-full items-center px-4 text-left text-[15px] text-[#D84B4B]">退出群聊</button><button type="button" disabled={members.length > 1} onClick={() => onSetDangerAction("dissolve")} className="flex min-h-14 w-full items-center border-t border-border-light px-4 text-left text-[15px] text-[#D84B4B] disabled:text-text-tertiary">解散群聊<span className="ml-auto text-[12px] text-text-tertiary">{members.length > 1 ? "请先移除其他协作者" : ""}</span></button></GroupSettingsSection>{dangerAction && <div className="mx-4 mt-5 rounded-lg border border-[#F1C8C8] bg-[#FFF7F7] p-4"><p className="text-[15px] font-medium text-text">确认{dangerAction === "exit" ? "退出群聊" : "解散群聊"}？</p><p className="mt-1 text-[13px] leading-5 text-text-tertiary">这是本地 Demo 操作，不会影响真实群聊。</p><div className="mt-4 flex justify-end gap-3"><button type="button" onClick={() => onSetDangerAction(null)} className="text-[14px] text-text-tertiary">取消</button><button type="button" onClick={onConfirmDanger} className="text-[14px] font-medium text-[#D84B4B]">确认</button></div></div>}<GroupSettingsNotice notice={notice} /></section>;
+}
+
+function GroupSettingsSection({ title, children }: { title?: string; children: React.ReactNode }) {
+  return <section className="mt-4"><>{title && <p className="px-5 pb-2 text-[13px] font-medium text-text-tertiary">{title}</p>}</><div className="border-y border-border-light bg-surface">{children}</div></section>;
+}
+
+function GroupSettingsNotice({ notice }: { notice: string }) {
+  return notice ? <p className="mx-5 mt-5 rounded-lg bg-primary-soft px-3 py-2.5 text-center text-[13px] text-primary">{notice}</p> : null;
+}
+
+function SettingSwitch({ checked, onChange, label }: { checked: boolean; onChange: (checked: boolean) => void; label: string }) {
+  return <button type="button" className={cn("relative h-7 w-12 rounded-full transition-colors", checked ? "bg-primary" : "bg-surface-2")} onClick={(event) => { event.stopPropagation(); onChange(!checked); }} aria-pressed={checked} aria-label={`${checked ? "关闭" : "开启"}${label}`}><span className={cn("absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-[22px]" : "translate-x-0.5")} /></button>;
+}
+
+function getGroupSettingsViewTitle(view: GroupSettingsView) {
+  const titles: Record<GroupSettingsView, string> = { main: "群聊设置", members: "协作者", invite: "邀请协作者", join: "加入方式", requests: "入群申请", nickname: "我的群昵称", search: "搜索群内快记", children: "子主题", media: "媒体、文件和链接", danger: "群聊管理" };
+  return titles[view];
+}
+
+function getJoinModeLabel(mode: TestGroupSettings["joinMode"]) {
+  return mode === "invite" ? "仅邀请" : mode === "approval" ? "需审核" : "公开加入";
+}
+
+function getJoinModeDescription(mode: TestGroupSettings["joinMode"]) {
+  return mode === "invite" ? "只有群成员邀请后才能加入" : mode === "approval" ? "提交申请后，由群主审核" : "任何人都可以通过链接加入";
+}
+
+function GroupSettingRow({
+  icon,
+  label,
+  value,
+  trailing,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value?: string;
+  trailing?: React.ReactNode;
+  onClick?: () => void;
+}) {
+  const content = (
+    <>
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center text-text-tertiary">{icon}</span>
+      <span className="min-w-0 flex-1 text-[15px] text-text">{label}</span>
+      {trailing ?? (
+        <>
+          {value && <span className="text-[13px] text-text-tertiary">{value}</span>}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-tertiary" aria-hidden="true">
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+        </>
+      )}
+    </>
+  );
+
+  if (trailing) {
+    return <div className="flex min-h-14 w-full items-center gap-3 px-4 text-left">{content}</div>;
+  }
+
+  return (
+    <button type="button" onClick={onClick} className="flex min-h-14 w-full items-center gap-3 px-4 text-left transition hover:bg-hover-overlay">
+      {content}
+    </button>
+  );
+}
+
+function BellIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+    </svg>
+  );
+}
+
+function MembersIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+function MediaIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m3 16 5-5 4 4 3-3 6 6M8.5 8.5h.01" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </svg>
+  );
+}
+
+function MoreIcon({ expanded = false }: { expanded?: boolean }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="18" cy="12" r="1" fill="currentColor" /><path className={expanded ? "origin-center rotate-180" : "origin-center"} d="m8 17 4 4 4-4" /></svg>;
+}
+
+function LinkIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07.07l2-2a5 5 0 0 0-7.07-7.07l-1.15 1.15" /><path d="M14 11a5 5 0 0 0-7.07-.07l-2 2A5 5 0 0 0 12 20l1.15-1.15" /></svg>;
+}
+
+function ShieldIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="m9 12 2 2 4-4" /></svg>;
+}
+
+function EditIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z" /></svg>;
+}
+
+function BookmarkIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4Z" /></svg>;
+}
+
+function BranchIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 3v12a3 3 0 0 0 3 3h9" /><path d="m15 14 3 3-3 3" /><circle cx="6" cy="3" r="2" /></svg>;
+}
+
+function LockIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>;
+}
+
+function DownloadIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></svg>;
 }
 
 function shouldShowConversationTime(prevSendAt: number, currentSendAt: number) {
@@ -2615,7 +3264,7 @@ function AnswerGuideChat({ onBack }: { onBack: () => void }) {
           aria-label={t("common.back")}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
+            <path d="m14 6-6 6 6 6" />
           </svg>
         </button>
         <div className="ml-1 flex min-w-0 items-center gap-2">
@@ -2681,7 +3330,7 @@ function MobileBottomNavigation({
   const { t } = usePreferences();
 
   return (
-    <nav className="shrink-0 bg-bg px-2 pb-3 pt-1">
+    <nav className="mobile-bottom-navigation shrink-0 bg-bg px-2 pb-3 pt-1">
       <div className="flex h-12 items-center">
         {tabs.map((tab) => {
           const active = tab.key === currentPage;
@@ -3389,7 +4038,7 @@ function MobilePageHeader({ title, onBack }: { title: string; onBack: () => void
         aria-label={t("common.back")}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M19 12H5M12 19l-7-7 7-7" />
+          <path d="m14 6-6 6 6 6" />
         </svg>
       </button>
       <h1 className="ml-1 truncate text-[17px] font-semibold leading-5 text-text">
